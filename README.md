@@ -32,7 +32,7 @@ pip install -e .[dev]
 uvicorn app.main:app --reload
 ```
 
-The backend serves under `http://localhost:8000` and the frontend expects `VITE_API_BASE_URL=http://localhost:8000/api/v1`.
+The backend serves under `http://localhost:8000` and the frontend expects `VITE_API_BASE_URL=http://localhost:8000/api/
 
 ## Phase 1 scope
 - React application shell for the research workspace

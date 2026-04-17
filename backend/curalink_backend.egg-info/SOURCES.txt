@@ -15,6 +15,11 @@ app/core/config.py
 app/schemas/__init__.py
 app/schemas/contracts.py
 app/services/__init__.py
+app/services/clinicaltrials_service.py
+app/services/llm_service.py
+app/services/openalex_service.py
+app/services/pubmed_service.py
+app/services/reranker.py
 app/services/session_store.py
 curalink_backend.egg-info/PKG-INFO
 curalink_backend.egg-info/SOURCES.txt
