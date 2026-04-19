@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: curalink-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: GROQ_API_KEY
+        sync: false        # you'll enter this manually in the Render dashboard
+      - key: GROQ_CHAT_MODEL
+        value: gemma2-9b-it
+      - key: ALLOWED_ORIGINS
+        value: https://your-frontend-url.com   # update after deploying frontend
