@@ -1,26 +1,62 @@
-# Python
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+build/
+*.whl
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+*.log
 
-# Virtual environments
+# ─── Virtual environments ─────────────────────────────────────────────────────
 .venv/
+venv/
+env/
 backend/.venv/
 
-# Node
+# ─── Node / Frontend ──────────────────────────────────────────────────────────
 node_modules/
 frontend/node_modules/
 frontend/dist/
-dist/
+frontend/.next/
+frontend/build/
+*.tsbuildinfo
 
-# Environment files
+# ─── Environment & Secrets ────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+service-account*.json
 
-# Editors and OS files
+# ─── Database ─────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Editors & IDEs ───────────────────────────────────────────────────────────
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+output/
+.playwright-cli/
+dist/

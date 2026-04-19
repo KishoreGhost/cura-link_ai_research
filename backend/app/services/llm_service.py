@@ -1,7 +1,8 @@
-"""LLM service — Ollama integration with structured medical research prompting.
+"""LLM service — Groq (cloud) or Ollama (local) with structured medical research prompting.
 
-Uses the local Ollama server (configured via settings.ollama_base_url).
-Falls back gracefully if Ollama is unavailable.
+Priority:
+  1. Groq  — when GROQ_API_KEY is set in environment / .env
+  2. Ollama — fallback for local development (localhost:11434)
 """
 
 from __future__ import annotations
@@ -23,6 +24,54 @@ from app.schemas.contracts import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _use_groq() -> bool:
+    """Return True if a Groq API key is configured."""
+    return bool(settings.groq_api_key)
+
+
+async def _call_llm(messages: list[dict[str, Any]], temperature: float = 0.3, max_tokens: int = 1024) -> str:
+    """
+    Unified LLM call — routes to Groq or Ollama based on config.
+    Returns the assistant message content string, or empty string on failure.
+    """
+    if _use_groq():
+        url = 'https://api.groq.com/openai/v1/chat/completions'
+        headers = {
+            'Authorization': f'Bearer {settings.groq_api_key}',
+            'Content-Type': 'application/json',
+        }
+        body: dict[str, Any] = {
+            'model': settings.groq_chat_model,
+            'messages': messages,
+            'temperature': temperature,
+            'max_tokens': max_tokens,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, headers=headers, json=body)
+                response.raise_for_status()
+                return response.json()['choices'][0]['message']['content']
+        except Exception as exc:
+            logger.warning('Groq call failed: %s', exc)
+            return ''
+    else:
+        url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
+        body = {
+            'model': settings.ollama_chat_model,
+            'messages': messages,
+            'stream': False,
+            'options': {'temperature': temperature},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(url, json=body)
+                response.raise_for_status()
+                return response.json().get('message', {}).get('content', '')
+        except Exception as exc:
+            logger.warning('Ollama call failed: %s', exc)
+            return ''
 
 # ─── Conversational intent detection ─────────────────────────────────────────
 
@@ -89,7 +138,6 @@ _FALLBACK_REPLIES: dict[str, str] = {
 
 async def generate_conversational_response(message: str) -> tuple[list[AnswerSection], list[CitationRecord], str]:
     """Generate a friendly conversational reply without triggering any research pipeline."""
-    # Decide which fallback to use
     msg_lower = message.lower()
     if any(w in msg_lower for w in ['thank', 'thx', 'ty', 'cheers']):
         fallback_text = _FALLBACK_REPLIES['thanks']
@@ -98,32 +146,21 @@ async def generate_conversational_response(message: str) -> tuple[list[AnswerSec
     else:
         fallback_text = _FALLBACK_REPLIES['default']
 
-    # Try Ollama for a natural response first
-    ollama_url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                ollama_url,
-                json={
-                    "model": settings.ollama_chat_model,
-                    "messages": [
-                        {"role": "system", "content": _CONVERSATIONAL_SYSTEM_PROMPT},
-                        {"role": "user", "content": message},
-                    ],
-                    "stream": False,
-                    "options": {"temperature": 0.7, "num_predict": 120},
-                },
-            )
-            if response.status_code == 200:
-                raw = response.json().get("message", {}).get("content", "").strip()
-                if raw:
-                    section = AnswerSection(heading="Cura", body=raw)
-                    return [section], [], raw
-    except Exception as exc:
-        logger.debug("Ollama unavailable for conversational reply: %s", exc)
+    raw = await _call_llm(
+        messages=[
+            {'role': 'system', 'content': _CONVERSATIONAL_SYSTEM_PROMPT},
+            {'role': 'user', 'content': message},
+        ],
+        temperature=0.7,
+        max_tokens=120,
+    )
+
+    if raw:
+        section = AnswerSection(heading='Cura', body=raw)
+        return [section], [], raw
 
     # Hardcoded fallback
-    section = AnswerSection(heading="Cura", body=fallback_text)
+    section = AnswerSection(heading='Cura', body=fallback_text)
     return [section], [], fallback_text
 
 
@@ -278,31 +315,12 @@ async def generate_research_answer(
     """
     system_prompt = _build_system_prompt(disease, intent, location, publications, trials)
 
-    # Build message list: system + history + current query
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-    for msg in conversation_history[-6:]:  # Keep last 6 messages for context
-        messages.append({"role": msg.role, "content": msg.content})
-    messages.append({"role": "user", "content": query})
+    messages: list[dict[str, Any]] = [{'role': 'system', 'content': system_prompt}]
+    for msg in conversation_history[-6:]:
+        messages.append({'role': msg.role, 'content': msg.content})
+    messages.append({'role': 'user', 'content': query})
 
-    ollama_url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
-
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                ollama_url,
-                json={
-                    "model": settings.ollama_chat_model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {"temperature": 0.3, "top_p": 0.9},
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw_content: str = data.get("message", {}).get("content", "")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Ollama call failed: %s — using fallback summary.", exc)
-        raw_content = ""
+    raw_content = await _call_llm(messages, temperature=0.3, max_tokens=1024)
 
     citations = _build_citations(publications, trials)
 
@@ -314,7 +332,7 @@ async def generate_research_answer(
 
     # Fallback: build sections from raw data without LLM
     fallback_sections = _build_fallback_sections(query, disease, publications, trials)
-    return fallback_sections, citations, "(Ollama unavailable — evidence-based fallback summary)"
+    return fallback_sections, citations, '(LLM unavailable — evidence-based fallback summary)'
 
 
 def _build_fallback_sections(

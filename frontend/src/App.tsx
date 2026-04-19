@@ -50,6 +50,36 @@ interface SessionEntry {
   ts: string
 }
 
+// ─── Conversational detection (mirrors backend logic) ───────────────────────
+
+const CONVERSATIONAL_PATTERNS = [
+  'hello', 'hi', 'hey', 'howdy', 'hiya', 'sup', "what's up", 'whats up',
+  'who are you', 'what are you', 'what can you do', 'what do you do',
+  'tell me about yourself', 'introduce yourself', 'your name',
+  'how are you', "how's it going", 'good morning', 'good afternoon',
+  'good evening', 'good night', 'thanks', 'thank you', 'thx', 'ty',
+  'cheers', 'cool', 'awesome', 'great', 'nice',
+  'help', 'what should i ask', 'how does this work', 'get started',
+  'can you help', 'how do i use',
+]
+
+const MEDICAL_KEYWORDS = [
+  'disease', 'cancer', 'diabetes', 'treatment', 'symptoms', 'diagnosis',
+  'trial', 'medication', 'drug', 'study', 'research', 'clinical', 'therapy',
+  'patient', 'cure', 'syndrome', 'disorder', 'condition', 'infection',
+  'surgery', 'hospital', 'doctor', 'physician', 'oncology', 'neurology',
+  'cardiovascular', 'parkinson', 'alzheimer', 'covid', 'vaccine', 'gene',
+]
+
+function isConversational(message: string): boolean {
+  const msg = message.toLowerCase().trim().replace(/[!?.]+$/, '')
+  // Short messages with no medical keywords are conversational
+  if (msg.split(' ').length <= 3 && !MEDICAL_KEYWORDS.some(kw => msg.includes(kw))) {
+    return true
+  }
+  return CONVERSATIONAL_PATTERNS.some(pattern => msg.includes(pattern))
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SUGGESTIONS = [
@@ -343,21 +373,12 @@ export default function App() {
     const candidateTarget = activeTools.has('deep') ? 300 : 150
     const loc = activeTools.has('web') && location.trim() ? location.trim() : undefined
 
+    const conversational = isConversational(queryText)
+
     try {
-      const [res, chat] = await Promise.all([
-        fetchResearch({
-          query: queryText,
-          candidate_target: candidateTarget,
-          include_trials: includeTrials,
-          context: {
-            disease: diseaseCtx || queryText,
-            intent: queryText,
-            location: loc,
-            patient_alias: patientName.trim() || undefined,
-          },
-          session_id: sessionId ?? undefined,
-        }),
-        sendChatTurn({
+      if (conversational) {
+        // ── Greeting / off-topic — skip research retrieval entirely ──
+        const chat = await sendChatTurn({
           session_id: sessionId ?? undefined,
           context_update: sessionId ? undefined : {
             disease: diseaseCtx || queryText,
@@ -365,24 +386,62 @@ export default function App() {
             patient_alias: patientName.trim() || undefined,
           },
           messages: [{ role: 'user', content: queryText }],
-        }),
-      ])
+        })
 
-      const sid = chat.session_id
-      if (!sessionId) {
-        setSessionId(sid)
-        registerSession(sid, queryText)
+        const sid = chat.session_id
+        if (!sessionId) {
+          setSessionId(sid)
+          registerSession(sid, queryText)
+        }
+
+        setFeed(f => {
+          const base = f.filter(x => x.kind !== 'thinking')
+          const additions: FeedEntry[] = []
+          if (chat.answer_sections.length) additions.push({ kind: 'answer', sections: chat.answer_sections })
+          return [...base, ...additions]
+        })
+      } else {
+        // ── Research query — run full retrieval + chat in parallel ──
+        const [res, chat] = await Promise.all([
+          fetchResearch({
+            query: queryText,
+            candidate_target: candidateTarget,
+            include_trials: includeTrials,
+            context: {
+              disease: diseaseCtx || queryText,
+              intent: queryText,
+              location: loc,
+              patient_alias: patientName.trim() || undefined,
+            },
+            session_id: sessionId ?? undefined,
+          }),
+          sendChatTurn({
+            session_id: sessionId ?? undefined,
+            context_update: sessionId ? undefined : {
+              disease: diseaseCtx || queryText,
+              location: loc,
+              patient_alias: patientName.trim() || undefined,
+            },
+            messages: [{ role: 'user', content: queryText }],
+          }),
+        ])
+
+        const sid = chat.session_id
+        if (!sessionId) {
+          setSessionId(sid)
+          registerSession(sid, queryText)
+        }
+
+        setFeed(f => {
+          const base = f.filter(x => x.kind !== 'thinking')
+          const additions: FeedEntry[] = []
+          if (chat.answer_sections.length) additions.push({ kind: 'answer', sections: chat.answer_sections })
+          if (res.publications.length) additions.push({ kind: 'pubs', pubs: res.publications })
+          if (res.clinical_trials.length) additions.push({ kind: 'trials', trials: res.clinical_trials })
+          if (chat.citations.length) additions.push({ kind: 'cites', cites: chat.citations })
+          return [...base, ...additions]
+        })
       }
-
-      setFeed(f => {
-        const base = f.filter(x => x.kind !== 'thinking')
-        const additions: FeedEntry[] = []
-        if (chat.answer_sections.length) additions.push({ kind: 'answer', sections: chat.answer_sections })
-        if (res.publications.length) additions.push({ kind: 'pubs', pubs: res.publications })
-        if (res.clinical_trials.length) additions.push({ kind: 'trials', trials: res.clinical_trials })
-        if (chat.citations.length) additions.push({ kind: 'cites', cites: chat.citations })
-        return [...base, ...additions]
-      })
     } catch (e) {
       setFeed(f => f.filter(x => x.kind !== 'thinking'))
       setError(e instanceof Error ? e.message : 'Request failed. Please try again.')
